@@ -1,113 +1,212 @@
 require 'sinatra'
 require 'google/cloud/storage'
 require 'digest'
+require 'logger'
 
 storage = Google::Cloud::Storage.new(project_id: 'cs291-f19')
 bucket = storage.bucket 'cs291_project2', skip_lookup: true
 
+logger = Logger.new $stdout
+logger.level = Logger::INFO
+Google::Apis.logger = logger
 
 get '/' do
+  logger.info "URL Matched /"
   redirect "/files/"
 end
 
-def is_valid_sha256_hexdigest(string)
-  # 64 length
-  if string.length == 64
-  # Hex
 
+def is_valid_sha256_hexdigest(string)
+  if string and string.length == 64 and !string[/\H/]
+    puts "valid sha256_digest"
+    return true
+  end
+
+  puts "invalid sha256_digest"
+  return false
 end
+
 
 def is_valid_filename(name)
-  # Check if slash in pos 2 and 5
-
-  # Remove 2, 5 to obtain just filename
-
-end
-
-get '/files/' do
-  "Get files in the bucket\n"
-  files_in_bucket = bucket.list()
-  print(files_in_bucket)
-  files = []
-  files.each do |file|
-    if is_valid_filename(file.name)
-      files.push file.name
-    end
-  end
-  files = files.sort
-  files = files.to_json
-  body files
-end
-
-
-post '/files/' do
-  # check if digest is valid hex 256 DIGEST
   begin
-    upload_file = params['file']['tempfile']
-    file_size = params['file']['tempfile'].size
-
-    if !upload_file
-      [422, "Filename not provided"]
-    end
-
-    if file_size > (1024*1024)  #1MB??
-      [422, "File is too large"]
+    if name[2] == '/' and name[5] == '/'
+      puts "Slashes exist"
+      name[2] = ""
+      name[4] = ""
+      puts "New file name is: "
+      print(name)
+    else
+      puts "invalid path in name"
+      return ""
     end
   rescue
+    puts "an error occurred"
+    return ""
+  end
+
+  if is_valid_sha256_hexdigest(name)
+    return name
+  end
+
+  puts "not a valid sha 256 hex digest"
+  return ""
+end
+
+
+get '/files/:digest' do
+  puts "URL Matched /files/:digest"
+  digest = params['digest']
+  # the digest should be allowed to be case insensitive!!!!! what does that mean again..?
+  puts "Digest: "
+  puts digest
+
+  if not is_valid_sha256_hexdigest(digest)
+    puts "Filename is not a valid hexdigest"
     status 422
     return
   end
 
-  if bucket.file Digest::SHA256.hexdigest(upload_file)
-    # file with same name already exists.
-    [409, "File with same name already exists"]
+  digest = add_slashes(digest)
+  file = bucket.file digest
+
+  if file
+    puts "file in bucket: "
+    print(file)
+    downloaded = file.download
+    downloaded.rewind
+
+    content_type file.content_type
+    status 200
+    body downloaded.read
+    return
   else
-    # upload file to gcs and return response.
-    sha256_digest = Digest::SHA256.hexdigest(upload_file) # is this right lol
-    type = params['file']['type']
-    # Add slashes
-    # file = bucket.create_file sha256_digest path_in_storage, content_type: type
-    [201, "uploaded: #{sha256_digest}"]
+    status 422
+    body "File not found"
+    return
   end
 end
 
+def add_slashes(string)
+  string = string.insert(2, '/')
+  string = string.insert(5, '/')
+  return string
+end
 
-get '/files/:DIGEST' do
-  file_name = params['DIGEST']
+get '/files/' do
+  puts "URL Matched /files/"
+  puts "Get files in the bucket\n"
+  files_in_bucket = bucket.files
 
-  if is_sha256(file_name)
-    [422, "Filename is not a valid hexdigest"]
+  files = []
+  files_in_bucket.each do |file|
+    print(file.name)
+    parsed_file = is_valid_filename(file.name)
+    print "parsed name: "
+    print(parsed_file)
+    if parsed_file != ""
+      files.push parsed_file
+    end
+  end
+
+  files = files.sort
+  files = files.to_json
+  print(files)
+  status 200
+  body files
+  return
+end
+
+
+post '/files/' do
+  begin
+    if params.key?('file')
+      file = params['file']
+      puts "File: "
+      puts file
+      if file ==  ""
+        puts "File is empty"
+        status 422
+        return
+      end
+    else
+      status 422
+      return
+    end
+    puts "Getting file size: "
+    if file.key?('tempfile')
+      tempfile = file['tempfile']
+      file_size = tempfile.size
+      puts file_size
+      if not tempfile or not file["filename"] or file_size > 1048576
+        puts "File not provided or file too large"
+        status 422
+        return
+      end
+    else
+      puts "No tempfile key found"
+      status 422
+      return
+    end
+  rescue
+    puts "Caught exception"
+    status 422
     return
   end
 
-  file = bucket.file file_name
-  if file
-    content_type file.content_type
-    # headers content-type=file['content-type']
-    [200, file['body']]
-  else
-    [404, "File not found"]
-  end
-end
 
-
-delete '/files/:DIGEST' do
-  file_name = params['DIGEST']
-
-  if file_name not hexdigest
-    [422, "Filename is not a valid hexdigest"]
-  end
+  downloaded = tempfile.read
+  puts "downloaded: "
+  puts downloaded
+  file_name = add_slashes(Digest::SHA256.hexdigest(downloaded))
 
   if bucket.file file_name
-    file = bucket.file file_name
-    file.delete
-  end
+    puts "File with same name already exists"
+    status 409
+    return
+  else
+    # upload file to gcs and return response.
+    begin
+      puts "file head"
+      puts file["head"]
 
-  [200, "File deleted"]
+      puts "tempfile path"
+      puts tempfile.path
+
+      head = file['head']
+      arr = head.split("\r\n")
+      content_type_str = arr[1].delete(' ')
+      type = (content_type_str.split(":"))[1]
+      print("type: " + type)
+      file = bucket.create_file tempfile.path, file_name, content_type: type
+      puts "Uploaded: #{sha256_digest}"
+      status 201
+      return
+    rescue
+      puts "error occurred while tryna upload file"
+      status 444
+    end
+  end
 end
 
-def is_sha256(file_name)
-  if !file_name[/\H/] && file_name.length == 64
-    return True
-  return False
+
+
+delete '/files/:digest' do
+  file_name = params['digest']
+
+  if not is_valid_sha256_hexdigest(file_name)
+    puts "Filename is not a valid hexdigest"
+    status 422
+    return
+  end
+
+  file_name = add_slashes(file_name)
+  file = bucket.file file_name
+
+  if file
+    file.delete
+    puts "File deleted"
+  end
+
+  status 200
+  return
 end
