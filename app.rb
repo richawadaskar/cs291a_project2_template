@@ -2,6 +2,7 @@ require 'sinatra'
 require 'google/cloud/storage'
 require 'digest'
 require 'logger'
+require 'json'
 
 storage = Google::Cloud::Storage.new(project_id: 'cs291-f19')
 bucket = storage.bucket 'cs291_project2', skip_lookup: true
@@ -72,12 +73,12 @@ get '/files/:digest' do
   if file
     puts "file in bucket: "
     print(file)
-    downloaded = file.download
-    downloaded.rewind
+    downloaded_file = file.download
+    downloaded_file.rewind
 
     content_type file.content_type
     status 200
-    body downloaded.read
+    body downloaded_file.read
     return
   else
     status 422
@@ -153,11 +154,12 @@ post '/files/' do
     return
   end
 
-
-  downloaded = tempfile.read
-  puts "downloaded: "
-  puts downloaded
-  file_name = add_slashes(Digest::SHA256.hexdigest(downloaded))
+  downloaded_file = tempfile.read
+  puts "downloaded_file: "
+  puts downloaded_file
+  digested_file = Digest::SHA256.hexdigest(downloaded_file)
+  puts digested_file
+  file_name = add_slashes(digested_file)
 
   if bucket.file file_name
     puts "File with same name already exists"
@@ -165,26 +167,26 @@ post '/files/' do
     return
   else
     # upload file to gcs and return response.
-    begin
-      puts "file head"
-      puts file["head"]
 
-      puts "tempfile path"
-      puts tempfile.path
+    puts "file head"
+    puts file["head"]
 
-      head = file['head']
-      arr = head.split("\r\n")
-      content_type_str = arr[1].delete(' ')
-      type = (content_type_str.split(":"))[1]
-      print("type: " + type)
-      file = bucket.create_file tempfile.path, file_name, content_type: type
-      puts "Uploaded: #{sha256_digest}"
-      status 201
-      return
-    rescue
-      puts "error occurred while tryna upload file"
-      status 444
-    end
+    puts "tempfile path"
+    puts tempfile.path
+
+    head = file['head']
+    arr = head.split("\r\n")
+    content_type_str = arr[1].delete(' ')
+    type = (content_type_str.split(":"))[1]
+    print("type: " + type)
+    file = bucket.create_file tempfile.path, file_name, content_type: type
+    return_body = "{\"uploaded\": \"#{digested_file}\"}"
+    puts "return_body: "
+    puts return_body
+
+    status 201
+    body return_body
+    return
   end
 end
 
