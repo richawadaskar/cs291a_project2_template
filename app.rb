@@ -56,8 +56,8 @@ end
 
 get '/files/:digest' do
   puts "URL Matched /files/:digest"
-  digest = params['digest']
-  # the digest should be allowed to be case insensitive!!!!! what does that mean again..?
+  digest = params['digest'].downcase
+
   puts "Digest: "
   puts digest
 
@@ -81,16 +81,17 @@ get '/files/:digest' do
     body downloaded_file.read
     return
   else
-    status 422
+    status 404
     body "File not found"
     return
   end
 end
 
 def add_slashes(string)
-  string = string.insert(2, '/')
-  string = string.insert(5, '/')
-  return string
+  modified_string = string
+  modified_string = modified_string.insert(2, '/')
+  modified_string = modified_string.insert(5, '/')
+  return modified_string
 end
 
 get '/files/' do
@@ -158,6 +159,7 @@ post '/files/' do
   puts "downloaded_file: "
   puts downloaded_file
   digested_file = Digest::SHA256.hexdigest(downloaded_file)
+  puts "digested_file: "
   puts digested_file
   file_name = add_slashes(digested_file)
 
@@ -166,8 +168,6 @@ post '/files/' do
     status 409
     return
   else
-    # upload file to gcs and return response.
-
     puts "file head"
     puts file["head"]
 
@@ -180,6 +180,8 @@ post '/files/' do
     type = (content_type_str.split(":"))[1]
     print("type: " + type)
     file = bucket.create_file tempfile.path, file_name, content_type: type
+    digested_file[2] = ""
+    digested_file[4] = ""
     return_body = "{\"uploaded\": \"#{digested_file}\"}"
     puts "return_body: "
     puts return_body
@@ -191,9 +193,8 @@ post '/files/' do
 end
 
 
-
 delete '/files/:digest' do
-  file_name = params['digest']
+  file_name = params['digest'].downcase
 
   if not is_valid_sha256_hexdigest(file_name)
     puts "Filename is not a valid hexdigest"
